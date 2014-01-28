@@ -1,0 +1,6 @@
+syntax: glob
+.idea
+*.egg*
+build
+dist
+*.pyc
