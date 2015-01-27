@@ -3,7 +3,7 @@ from setuptools import setup
 
 setup(
     name='McAfee',
-    version='4.6.0',
+    version='5.1',
     url='https://community.mcafee.com/docs/DOC-3095',
     license='',
     author='McAfee, Inc.',

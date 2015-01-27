@@ -1,15 +1,27 @@
-# Copyright (C) 2009-2010 McAfee, Inc.  All Rights Reserved.
-import sys
-import urllib, urllib2
-import mimetools, mimetypes
-from urllib2 import HTTPError, URLError, Request
+# Copyright (C) 2009-2013 McAfee, Inc.  All Rights Reserved.
+import json
 import logging
-try:
-    import json
-except ImportError, e:
-    import simplejson as json
-
+import mimetypes
+import socket
+import ssl
+import sys
+from uuid import uuid4
 from urlquote import quote
+
+try:
+    from httplib import HTTPSConnection
+except ImportError:
+    from http.client import HTTPSConnection
+
+try:
+    from urllib2 import HTTPError, URLError
+except ImportError:
+    from urllib.error import HTTPError, URLError
+
+try:
+    from urllib2 import build_opener, HTTPSHandler, HTTPPasswordMgrWithDefaultRealm, HTTPBasicAuthHandler, HTTPCookieProcessor, Request
+except ImportError:
+    from urllib.request import build_opener, HTTPSHandler, HTTPPasswordMgrWithDefaultRealm, HTTPBasicAuthHandler, HTTPCookieProcessor, Request
 
 #
 # CREATE_LOG_FILE is a flag to determine whether or not to create a log file
@@ -24,7 +36,7 @@ CREATE_LOG_FILE = False
 LOG_FILE = 'pyclient.log'
 
 #
-# LOGGING_LEVEL is a global setting controlling the verbosity of 
+# LOGGING_LEVEL is a global setting controlling the verbosity of
 # logging messages.
 # You can choose to set it one of the logging levels:
 #
@@ -42,15 +54,15 @@ LOG_FILE = 'pyclient.log'
 # CRITICAL messages are currently not generated from this script.
 #
 # ERROR messages include all of the lower level log messages and generate
-# additional messages if there is a significant error, ie unable to 
+# additional messages if there is a significant error, ie unable to
 # connect to the server or passing invalid arguments to a command.
 #
 # WARN messages include all of the lower level log messages, plus messages
-# generated messages if for instance there was a call to a non-existant
-# command.  It would also log an attempt to invalidly use the client object (ie, 
-# call a _PyFeature as a function, that is client.core() ). 
+# generated messages if for instance there was a call to a non-existent
+# command.  It would also log an attempt to invalidly use the client object (ie,
+# call a _PyFeature as a function, that is client.core() ).
 #
-# INFO messages include all of the lower level log messages, plus log the 
+# INFO messages include all of the lower level log messages, plus log the
 # requests sent to the server, that is the full request URL plus any POSTed
 # data.  The security token retrieved from the server is logged.
 #
@@ -64,12 +76,12 @@ LOGGING_LEVEL = logging.INFO
 
 
 # Create logger (and hence a log file) ONLY if specifically requested.
-# 
-# We need to guard the creation of a logger/log file with a flag. Without 
-# this guard, a log file will be created whether there are 
+#
+# We need to guard the creation of a logger/log file with a flag. Without
+# this guard, a log file will be created whether there are
 # log messages generated or not. We don't want to leave log files
 # laying around when we don't want them.
-logger = None 
+logger = None
 if CREATE_LOG_FILE:
     FORMAT = '%(asctime)s - %(name)s - %(levelname)s - %(message)s'
     logging.basicConfig(level=LOGGING_LEVEL,
@@ -79,11 +91,11 @@ if CREATE_LOG_FILE:
 
 
 def log(log_level, msg):
-    "Helper function to log message(s) if logging is enabled"
+    """Helper function to log message(s) if logging is enabled"""
     if logger is not None: logger.log(log_level, msg)
 
 def log_and_raise_error(log_level, msg, code=0):
-    "Helper function to log and raise error"
+    """Helper function to log and raise error"""
     log(log_level, msg)
     raise CommandInvokerError(code, msg)
 
@@ -127,11 +139,11 @@ def _encode_multipart_formdata(fields):
     body, content_type = _encode_multipart_formdata(fields)
     """
 
-    BOUNDARY = '--' + mimetools.choose_boundary()
+    BOUNDARY = '--' + uuid4().hex
 
     body = ''
 
-    for key, value in fields.iteritems():
+    for key, value in fields.items():
         if isinstance(value, tuple):
             filename = value[0]
             content = value[1]
@@ -154,6 +166,32 @@ def _encode_multipart_formdata(fields):
 
     return body, content_type
 
+class ExHTTPSConnection(HTTPSConnection):
+    def __init__(self, *args, **kwargs):
+        HTTPSConnection.__init__(self, *args, **kwargs)
+
+    # Override httplib.HTTPSConnection.connect()
+    def connect(self):
+        sock = socket.create_connection((self.host, self.port),
+            self.timeout, self.source_address)
+        if self._tunnel_host:
+            self.sock = sock
+            self._tunnel()
+        self.sock = ssl.wrap_socket(sock, self.key_file, self.cert_file, ciphers='DEFAULT:!DH')
+
+"""
+Using a custom handler to exclude some ciphers. Python 2.x does not always handle
+these correctly and may result in a connection error similar to the following:
+
+    CommandInvokerError: Failed to reach the server servername:8443. Error/reason:
+    <urlopen error [Errno 1] _ssl.c:480: error:14094410:SSL routines:SSL3_READ_BYTES:
+    sslv3 alert handshake failure>
+
+This has been fixed in Python 3.3: http://bugs.python.org/issue13626
+"""
+class ExHTTPSHandler(HTTPSHandler):
+    def https_open(self, req):
+        return self.do_open(ExHTTPSConnection, req)
 
 """
 We create our own exception and override __str__ so we can use a unicode string
@@ -165,26 +203,26 @@ class CommandInvokerError(Exception):
     def __init__(self, code, msg):
         self.code = code
         self.msg = msg
-    
+
     def __str__(self):
         return self.msg
 
-   
-class _CommandInvoker:
+
+class _CommandInvoker(object):
     """Handles processing of a remote command request.
     This class is only intended for use inside this script (private)
     """
-    
+
     def __init__(self, host, port, username, password, protocol, output, display):
         """
         Initializes the invoker by setting up basic authentication with given parameters.
-        
+
         @param host - the servers name (string)
         @param port - the port to connect to on host (string)
         @param username - the username (string)
         @param password - the username's password (string)
         @param protocol - the protocol to use ('http','https')
-        @param output - the requested output type from the server: one of ('terse','verbose','json','xml')
+        @param output - the requested output type from the server one of ('terse','verbose','json','xml')
         the default is 'json'.  terse and verbose outputs are in a human readable form.
         @param display - when output is 'terse' or 'verbose', determines what happens with the response
         returned from the server.  If display is False only return the value or if display is True 'print' the value.
@@ -202,26 +240,29 @@ class _CommandInvoker:
         try:
             self.protocols.index(protocol)
             self.protocol = protocol
-        except:
+        except ValueError:
             log_and_raise_error(logging.ERROR, 'Unsupported protocol: ' + protocol)
 
         try:
             self.outputs.index(output)
             self.output = output
-        except:
+        except ValueError:
             log_and_raise_error(logging.ERROR, 'Unsupported output: ' + output)
 
-        if(display != None):
+        if display is not None:
             self.display = display
         else: self.display = True
-        
+
         self.baseurl = '%s://%s:%s/remote' % (protocol, self.host, self.port)
 
         #Setup a handler to pass credentials for BASIC auth
-        passmgr = urllib2.HTTPPasswordMgrWithDefaultRealm()
+        passmgr = HTTPPasswordMgrWithDefaultRealm()
         passmgr.add_password(None, self.baseurl, username.encode(_UTF8), password.encode(_UTF8))
-        authhandler = urllib2.HTTPBasicAuthHandler(passmgr)
-        self.opener = urllib2.build_opener(authhandler, urllib2.HTTPCookieProcessor())
+        authhandler = HTTPBasicAuthHandler(passmgr)
+        if sys.version_info < (2, 7):
+            self.opener = build_opener(authhandler, HTTPCookieProcessor())
+        else: # version is 2.7 or above
+            self.opener = build_opener(ExHTTPSHandler(), authhandler, HTTPCookieProcessor())
 
     def save_token(self):
         """
@@ -235,30 +276,32 @@ class _CommandInvoker:
         response = self.get_response(url)
         self.token = self.parse_response(response)
 
-    def invoke(self, command, args={}):
+    def invoke(self, command, args=None):
         """
         Submits the requested command to the server, returning the results
-        of the command's invocation according to the output type specified on 
-        class creation, however, the output type can be overridden for this 
+        of the command's invocation according to the output type specified on
+        class creation, however, the output type can be overridden for this
         invocation by passing in the argument ':output'.  It must be one of the
         supported protocols: terse, verbose, xml, or json.
-        
+
         @param command - the name of the command (i.e., prefix.commandName.do)
         @param args - a dictionary of named arguments
         @returns the results of invoking the command as a json object
         @throws CommandInvokerException on error
         """
+        if args is None:
+            args = {}
+
         argscopy = args
-        output = None  # the output type for this invocation
         try:
             argscopy[':output'] = args[':output']
-        except KeyError, e:
+        except KeyError:
             #no overriding output type was specified so we use the default
             argscopy[':output'] = self.output
         output = argscopy[':output']
         if output != self.output:
             log(logging.INFO, "Invocation of '%s' requests '%s' output rather than default '%s'" % (command,output,self.output))
-            
+
         #We get the token for each invocation of a command so that we don't generate excessive
         #login/logout messages when the token expires.
         self.save_token()
@@ -268,6 +311,7 @@ class _CommandInvoker:
         deletekeys = []
         for key in argscopy:
             arg = argscopy[key]
+            if type(arg) != type('') and type(arg) != type(u''): continue #skip non-strings
             if arg[:8] == 'file:///':
                 filename = arg[8:]
                 content = self.get_file_contents(filename)
@@ -284,46 +328,48 @@ class _CommandInvoker:
         if output == 'json':
             try:
                 return json.loads(content)
-            except ValueError, e:
+            except ValueError as e:
                 log_and_raise_error(logging.ERROR, 'Error parsing JSON result: ' + str(e))
         elif output == 'xml':
              return content
         elif output == 'terse' or output == 'verbose':
-            if self.display: print content
+            if self.display: print(content)
             elif not self.display: return content
-    
-    def get_response(self, url, fileargs={}):
+
+    def get_response(self, url, fileargs=None):
+        if fileargs is None:
+            fileargs = {}
+
         try:
             sock = self.create_socket(url, fileargs)
             resultStr = sock.read().decode(_UTF8)
             sock.close()
             log(logging.DEBUG, 'Response: ' + resultStr)
             return resultStr
-        except HTTPError, e:
+        except HTTPError as e:
             log_and_raise_error(logging.ERROR, 'The server %s:%s could not fulfill the request. %s' % (self.host,self.port,str(e)))
-        except URLError, e:
+        except URLError as e:
             log_and_raise_error(logging.ERROR, 'Failed to reach the server %s:%s. Error/reason: %s' % (self.host,self.port,str(e)))
-        
+
     def parse_response(self, response):
         """
         Parses the raw response returned from a remote command invocation, returning
         its content, which is trimmed of leading and trailing whitespace.
         The input will look like the following:
-        
+
         OK:\r\ntrue                                ---->  returns "true"
-        
-        or in the error case, 
-        
+
+        or in the error case,
+
         "Error # :\r\nSome error string goes here  ---->  throws CommandInvokerError(#, "Some error string goes here")
-        
-        where # is the integer representing the error code returned.  
-            
-        @param s - the raw response from the server
+
+        where # is the integer representing the error code returned.
+
+        @param response - the raw response from the server
         @throws CommandInvokerError if the response from the server indicates an Error state
         @returns response from the server stripped of the protocol
-        
+
         """
-        d = {}
         code = 0
         try:
             status = response[:response.index(':')].split(' ')[0]
@@ -331,39 +377,42 @@ class _CommandInvoker:
             if status == 'Error': code = int(response[:response.index(':')].split(' ')[1])
             else: code = 0
             d = {'status':status, 'code':code, 'result':result}
-        except: #for thoroughness, in case there's no colon in the output or something else
+        except (TypeError, ValueError, IndexError): #for thoroughness, in case there's no colon in the output or something else
             #Or there was an error parsing the returned result from the server
             d = {'status':'Error', 'code':code, 'result':'Unable to parse the server\'s response'}
-        if status == 'OK':
-            pass 
-        elif status == 'Error':
+        if d["status"] == 'OK':
+            pass
+        elif d["status"] == 'Error':
             log_and_raise_error(logging.ERROR, d['result'], d['code'])
         else:
             log_and_raise_error(logging.ERROR, 'Unknown error occurred.  Status: (%s) Result: %s' % (d["status"], d["result"]))
         return d['result']
 
-    
+
     def build_url_request(self, command, args):
         """
         Helper function to construct and return the url that will be requested from the server
-        
+
         @param command - the command name (i.e., prefix.commandName)
         @param args - dictionary of the arguments to pass
         @returns the url to fetch (i.e, http://servername:8080/remote/prefix.commandName.do?arg=value)
         """
-        query_string = "&".join(["%s=%s" % (quote(str(k)), quote(v)) for k, v in args.items()])
-        return '%s/%s.do?%s' % (self.baseurl, command, query_string)
+        url = '%s/%s.do' % (self.baseurl, command)
+        query_string = "&".join(["%s=%s" % (quote(str(k)), quote(str(v))) for k, v in args.items()])
+        if not query_string:
+            return url
+        return '%s?%s' % (url, query_string)
 
     def create_socket(self, url, args):
         """
         Helper function to encapsulate getting a socket
-            
+
         @param url - the url to fetch (query string already appended)
         @param args - the file arguments as a tuple (filename, contents)
         @returns the socket object
         """
         log(logging.INFO, 'Request: ' + url)
-        if( len(args) == 0):
+        if not args:
             return self.opener.open(url)
         else:
             body, content_type = _encode_multipart_formdata(args)
@@ -374,18 +423,18 @@ class _CommandInvoker:
             headers = {'Content-Type':content_type}
             req = Request(url, data, headers)
             return self.opener.open(req)
-        
+
     def get_file_contents(self, filename):
         readmode = 'r'  #assume text file
-        type = _get_content_type(filename)
-        if(type[:3] != 'text'):
+        content_type = _get_content_type(filename)
+        if content_type[:3] != 'text':
             readmode = 'rb'  #binary file
         f = open(filename, readmode)
         content = f.read()
         f.close()
         return content
-           
-        
+
+
 
 def _get_command_names(invoker, feature=None):
     """
@@ -394,25 +443,25 @@ def _get_command_names(invoker, feature=None):
     the feature name...so if you call _get_command_names
     """
     #We only want json output here
-    if feature == None:
+    if feature is None:
         result = invoker.invoke('core.help', {':output':'json'})
     else:
         result = invoker.invoke('core.help', {'prefix':feature,':output':'json'})
-        
+
     cmds = []
-    for help in result:
+    for value in result:
         #need to use str() to convert fullName from unicode to ascii
         #otherwise it wont get appended to __members__
-        fullName = str(help[:help.index(' ')])
-        if feature != None:
+        fullName = str(value[:value.index(' ')])
+        if feature is not None:
             #get only the name of the command minus the prefix
-            fullName = fullName[fullName.index('.')+1:] 
+            fullName = fullName[fullName.index('.')+1:]
         cmds.append(fullName)
     return cmds
 
 def _get_command_prefixes(invoker):
-    "Returns a list of all the defined command prefixes"
-    cmds={} 
+    """Returns a list of all the defined command prefixes"""
+    cmds={}
     #cmds will be something like
     # {
     #  "core":["help","listUsers"],
@@ -422,18 +471,18 @@ def _get_command_prefixes(invoker):
         prefix = fullName[:fullName.index('.')]
         try:
             cmds[prefix].append('') #value appended is unimportant
-        except:
+        except KeyError:
             cmds[prefix] = []
     return cmds.keys()
 
-class _PyCommand:
-    "Represents an instance of a Python remote command"
+class _PyCommand(object):
+    """Represents an instance of a Python remote command"""
 
     def __init__(self, invoker, prefix, name):
         self.invoker = invoker
         self.prefix = prefix
         self.name = name
-        
+
     def __call__(self, *args, **kwargs):
         argmap = {}
         if len(list(args)) != 0:
@@ -444,7 +493,7 @@ class _PyCommand:
                 argmap[key] = kwargs[key]
         try:
             return self.invoker.invoke(self.prefix + '.' + self.name, argmap)
-        except CommandInvokerError, e:
+        except CommandInvokerError as e:
             if e.code == 1:
                 msg = "'" + self.prefix + "' has no attribute '" + self.name + "' (make sure the command exists and that mcafee.client(...) was called prior to invoking the command)"
                 log(logging.WARN, msg)
@@ -454,18 +503,18 @@ class _PyCommand:
                 raise e
 
 
-class _PyFeature:
+class _PyFeature(object):
     """
     _PyFeature represents an object in the 'client' class scope
     corresponding to the feature in a remote command (e.g., core, tasklog)
-    
+
     @param name - the name of the command
     """
 
     def __init__(self, invoker, name):
         self._module = name
         self._invoker = invoker
-        
+
     def __getattr__(self, attr):
         """
         When the caller requests attributes that are not available, assume
@@ -473,17 +522,17 @@ class _PyFeature:
         makes so we can return a list of commands
         """
         cmd = attr # for clarity...this is the command name, ie, listUsers
-        
+
         #We must catch accessing __members__,__repr__, and __str__ attributes
         #otherwise it will attempt to create a PyCommand and hence hit the server
         #which we don't want.
-        if cmd == '__members__': 
+        if cmd == '__members__':
             return # there are no members of a PyClient, only methods
         if cmd == '__methods__':
             return _get_command_names(self._invoker, self._module)
-        if cmd == '__repr__': 
+        if cmd == '__repr__':
             return # should anything be returned here?
-        if cmd == '__str__': 
+        if cmd == '__str__':
             return # should anything be returned here?
         if cmd == '__call__':
             msg = "'" + self._module + "' object is not callable"
@@ -499,26 +548,26 @@ class client(object):
     in this object.  Instantiating an instance of this class will provide
     access to mcafee commands.
     """
-    
+
     def __init__(self, host, port, username, password, protocol='https', output='json', display=True):
         """
-        Instantiates an instance of this class provides access to mcafee commands.
-        
+        Instantiates an instance of this class provides access to McAfee commands.
+
             @param host - the host name
             @param port - the port name
             @param username - the username
             @param password - the password
             @param protocol - the protocol to use for the connection (default 'https')
             @param output - the requested format from the server (default 'json')
-            @param display - indicates whether to print the response or return it  (default True) 
-            
+            @param display - indicates whether to print the response or return it  (default True)
+
             Example:
-            
+
             >>> import mcafee
             >>> mc = mcafee.client('host','port','usr','pwd')
             >>> mc.core.commandName()
-            
-        
+
+
             >>> import mcafee
             >>> mc = mcafee.client('host','port','usr','pwd',output='xml',display=False)
             >>> mc.core.commandName()
@@ -527,7 +576,7 @@ class client(object):
         self._invoker = _CommandInvoker(host, port, username, password, protocol, output, display)
         #hit the server so we can verify server and credentials will throw on error
         self._invoker.save_token()
-        
+
     def __getattr__(self, attr):
         """
         When the caller requests attributes that are not available, assume
@@ -535,10 +584,10 @@ class client(object):
         feature = attr #for clarity
         #The following is to overcome http://bugs.python.org/issue5370
         #If we use getattr(self, attr) we get infinite recursion
-        if 'attrs' in self.__dict__ and name in self.attrs:
-            return self.attrs[name]
+        if 'attrs' in self.__dict__ and attr in self.attrs:
+            return self.attrs[attr]
         else:
-            if attr == '__members__': 
+            if attr == '__members__':
                 return _get_command_prefixes(self._invoker)
             return _PyFeature(self._invoker, feature)
 
@@ -547,18 +596,18 @@ class client(object):
         Prints help for all commands or a specified command
         Use this command to get help on mcafee commands rather than python's
         built-in help().
-        
+
         @param command - the command name
-        
+
         Example:
-        
+
         >>> import mcafee
         >>> mc = mcafee.client('host','port','usr','pwd')
         >>> mc.help('core.help')
-        
+
         """
         #Override the default output type so the output is human readable
-        if (command != None):
+        if command is not None:
             self._invoker.invoke("core.help", {'command':command,':output':'terse'})
         else:
             self._invoker.invoke("core.help", {':output':'terse'})
@@ -567,46 +616,48 @@ class client(object):
         """
         Runs an arbitrary command with positional and/or named arguments
         Expects the first positional argument to be the command name
-        
+
         For example,
             >>> import mcafee
-            >>> c = mcafee.client(host,port,usr,pwd)
+            >>> c = mcafee.client('localhost',8443,'usr','pwd')
             >>> c.run('core.addUser','testUser','testUser')
             True
             >>>
         """
         argmap = {}
         cmdName = None
-        if (len(list(args)) < 1):
+        if not args:
             raise Exception('run requires at least one positional argument and it must be the command name')
-        if len(list(args)) != 0:
-            for index, value in enumerate(args):
-                if(index == 0):
-                    cmdName = value
-                else:
-                    argmap['param' + str(index)] = value
-        if len(list(kwargs)) != 0:
+        for index, value in enumerate(args):
+            if index == 0:
+                cmdName = value
+            else:
+                argmap['param' + str(index)] = value
+        if kwargs:
             for key in kwargs.keys():
                 argmap[key] = kwargs[key]
         try:
             return self._invoker.invoke(cmdName, argmap)
-        except CommandInvokerError, e:
+        except CommandInvokerError as e:
             if e.code == 1:
                 msg = "'" + self.prefix + "' has no attribute '" + self.name + "' (make sure the command exists and that mcafee.client(...) was called prior to invoking the command)"
                 raise AttributeError(msg)
             else:
                 raise e
 
-            
-    def _run(self, command, args={}):
+
+    def _run(self, command, args=None):
         """
-        Runs an arbitrary commmand, useful for passing system parameters that start with a colon (:)
+        Runs an arbitrary command, useful for passing system parameters that start with a colon (:)
         and hence are unable to be passed to the client.run() method because they are invalid
-        identifers.
-        
+        identifiers.
+
         @param command - the command name
         @param args - dictionary of arguments to the command
-        
+
         """
-            
-        return self._invoker.invoke(command, args)                
+
+        if args is None:
+            args = {}
+
+        return self._invoker.invoke(command, args)

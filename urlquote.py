@@ -15,7 +15,12 @@
 #
 # This version of quote() is intended to replace urllib.quote() and contains a fix for
 # http://bugs.python.org/issue1712522 which will allow unicode strings.
-# 
+#
+import sys
+
+if sys.version_info[0] > 2:
+    unicode = str
+
 always_safe = ('ABCDEFGHIJKLMNOPQRSTUVWXYZ'
                'abcdefghijklmnopqrstuvwxyz'
                '0123456789' '_.-')
@@ -41,7 +46,7 @@ def quote(s, safe = '/', encoding=None, errors=None):
     is reserved, but in typical usage the quote function is being
     called on a path where the existing slash characters are used as
     reserved characters.
-    
+
     string and safe may be either str or unicode objects.
 
     The optional encoding and errors parameters specify how to deal with
@@ -58,11 +63,11 @@ def quote(s, safe = '/', encoding=None, errors=None):
     if isinstance(safe, unicode):
         # Normalize 'safe' by converting to str and removing non-ASCII chars
         safe = safe.encode('ascii', 'ignore')
-        print safe
+        print(safe)
     # (Note that if 'safe' is already a str, non-ASCII bytes are allowed,
     # keeping with historical Python behaviour)
     cachekey = safe
-    
+
     try:
         safe_map = _safemaps[cachekey]
     except KeyError:
@@ -73,4 +78,4 @@ def quote(s, safe = '/', encoding=None, errors=None):
             safe_map[c] = (c in safe) and c or ('%%%02X' % i)
         _safemaps[cachekey] = safe_map
     res = map(safe_map.__getitem__, s)
-    return ''.join(res)    
+    return ''.join(res)
