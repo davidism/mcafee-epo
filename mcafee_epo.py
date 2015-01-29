@@ -6,7 +6,7 @@ try:
 except ImportError:
     from urllib.parse import urljoin
 
-__version__ = '1.0'
+__version__ = '1.0.1'
 
 
 class APIError(Exception):
@@ -103,7 +103,7 @@ class Client:
         if params is None:
             params = {}
 
-        for i, item in enumerate(args):
+        for i, item in enumerate(args, start=1):
             params['param{}'.format(i)] = item
 
         params.update(kwargs)
