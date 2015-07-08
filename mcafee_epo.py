@@ -6,7 +6,7 @@ try:
 except ImportError:
     from urllib.parse import urljoin
 
-__version__ = '1.0.1'
+__version__ = '1.0.2'
 
 
 class APIError(Exception):
@@ -81,7 +81,7 @@ class Client:
 
         return json.loads(text[3:]) if is_json else text[3:]
 
-    def __call__(self, name, *args, params=None, files=None, **kwargs):
+    def __call__(self, name, params=None, files=None, *args, **kwargs):
         """Make an API call by calling this instance.
         Collects arguments and calls :meth:`_request`.
 
