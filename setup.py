@@ -3,7 +3,7 @@ from setuptools import setup
 
 setup(
     name='mcafee-epo',
-    version='1.0.3',
+    version='1.0.4',
     url='https://bitbucket.org/davidism/mcafee-epo',
     license='BSD',
     author='David Lord',
