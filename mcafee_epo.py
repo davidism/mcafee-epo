@@ -6,8 +6,6 @@ try:
 except ImportError:
     from urllib.parse import urljoin
 
-__version__ = '1.0.2'
-
 
 class APIError(Exception):
     """Represents an error with the data received within a valid HTTP response."""
@@ -81,7 +79,7 @@ class Client:
 
         return json.loads(text[3:]) if is_json else text[3:]
 
-    def __call__(self, name, params=None, files=None, *args, **kwargs):
+    def __call__(self, name, *args, **kwargs):
         """Make an API call by calling this instance.
         Collects arguments and calls :meth:`_request`.
 
@@ -100,8 +98,8 @@ class Client:
         :return: deserialized JSON data
         """
 
-        if params is None:
-            params = {}
+        params = kwargs.pop('params', {})
+        files = kwargs.pop('files', {})
 
         for i, item in enumerate(args, start=1):
             params['param{}'.format(i)] = item

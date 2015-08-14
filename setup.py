@@ -1,14 +1,9 @@
 #!/usr/bin/env python
-import os
-import re
 from setuptools import setup
-
-with open(os.path.join(os.path.dirname(__file__), 'mcafee_epo.py')) as f:
-    version = re.search(r"__version__ = '(.*)'", f.read()).group(1)
 
 setup(
     name='mcafee-epo',
-    version=version,
+    version='1.0.3',
     url='https://bitbucket.org/davidism/mcafee-epo',
     license='BSD',
     author='David Lord',
