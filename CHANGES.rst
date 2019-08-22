@@ -1,9 +1,23 @@
+Version 1.0.4
+-------------
+
+Unreleased
+
+-   Indicate support for Python 2.7 and 3.5+.
+-   Moved source to Git on GitHub because BitBucket removed Mercurial
+    support.
+-   Moved package metadata to ``setup.cfg`` with a placeholder
+    ``setup.py``. Requires setuptools >= 30.3.0 to install sdist.
+-   Moved to ``src`` directory layout.
+-   Apply code style tools and pre-commit config.
+
+
 Version 1.0.3
 -------------
 
 Released 2015-08-14
 
--   Move named args to kwargs to make them keyword-only.
+-   Move named args to ``kwargs`` to make them keyword-only.
 
 
 Version 1.0.2
