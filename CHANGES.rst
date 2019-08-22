@@ -1,7 +1,7 @@
-Version 1.0.4
+Version 1.1.0
 -------------
 
-Unreleased
+Released 2019-08-22
 
 -   Indicate support for Python 2.7 and 3.5+.
 -   Moved source to Git on GitHub because BitBucket removed Mercurial
